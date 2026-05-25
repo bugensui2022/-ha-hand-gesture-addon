@@ -11,15 +11,15 @@ arch:
 startup: "services"
 boot: "auto"
 options:
-  rtsp_url: "rtsp://192.168.0.156:8554/live"
+  rtsp_url: "rtsp://192.168.1.100:554/live/main"
   reconnect_interval: 5
-  mqtt_host: "192.168.0.1"
+  mqtt_host: "192.168.1.5"
   mqtt_port: 1883
-  mqtt_username: "mqtt"
-  mqtt_password: "mqtt"
+  mqtt_username: "homeassistant"
+  mqtt_password: "secure_password"
   mqtt_topic: "homeassistant/sensor/hand_gesture/state"
   sensor_name: "手势识别传感器"
-  reset_hand_status_time: 2
+  reset_hand_status_time: 1
 schema:
   rtsp_url: "str"
   reconnect_interval: "int"
@@ -29,4 +29,4 @@ schema:
   mqtt_password: "str"
   mqtt_topic: "str"
   sensor_name: "str"
-  reset_hand_status_time: "int"
+  reset_hand_status_time: "float"
