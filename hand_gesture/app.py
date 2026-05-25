@@ -3,7 +3,7 @@ import time
 import json
 import cv2
 import mediapipe as mp
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqttFactory
 
 # 1. 尝试从 Home Assistant 挂载的本地选项 JSON 文件读取配置（即插即用）
 options = {}
@@ -25,13 +25,14 @@ MQTT_USER = options.get("mqtt_username", os.getenv("MQTT_USERNAME", "homeassista
 MQTT_PASS = options.get("mqtt_password", os.getenv("MQTT_PASSWORD", "secure_password"))
 MQTT_TOPIC = options.get("mqtt_topic", os.getenv("MQTT_TOPIC", "homeassistant/sensor/hand_gesture/state"))
 SENSOR_NAME = options.get("sensor_name", os.getenv("SENSOR_NAME", "手势识别传感器"))
+RESET_HAND_STATUS_TIME = float(options.get("reset_hand_status_time", os.getenv("RESET_HAND_STATUS_TIME", 1)))
 
 # 根据 MQTT 传感器主题自动解析发现配置主题
 # Home Assistant 标准自动发现配置格式： <discovery_prefix>/sensor/<object_id>/config
 discovery_topic = "homeassistant/sensor/hand_gesture/config"
 
 # 初始化配置 MQTT 客户端
-mqtt_client = mqtt.Client()
+mqtt_client = mqttFactory.Client()
 if MQTT_USER and MQTT_PASS:
     mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
 
@@ -115,10 +116,13 @@ def run_gesture_recognition():
     print("[SYSTEM] Starting Gesture Recognition Single Stream Loop...")
     connect_mqtt()
 
-    # 实体状态更新记录锁，用于实现精准 1 秒复位
+    # 实体状态更新记录锁，用于实现精准、自适应复位
     last_published_gesture = "None"
     last_published_time = 0.0
     reset_pending = False
+
+    # 预设的有效可执行手势集合（剔除 Unknown 过渡性状态，防止误触发及频繁颠簸）
+    VALID_GESTURES = ["✊ Fist", "👋 Wave", "✌️ Victory", "👍 Thumbs Up", "👎 Thumbs Down", "☝️ Point Up", "🤟 Rock On"]
 
     while True:
         print(f"[STREAM] Attempting to connect to camera RTSP source: {RTSP_URL}")
@@ -135,9 +139,9 @@ def run_gesture_recognition():
         consecutive_failures = 0
         
         while cap.isOpened():
-            # 1秒定时复位判定子引擎（重点！防止阻塞多进程，运行在主大环内部）
-            if reset_pending and (time.time() - last_published_time >= 1.0):
-                print("[MQTT] 1 second elapsed! Auto resetting sensor state to: 'None'")
+            # 自定义时间定时复位判定子引擎（运行在主循环内部，非阻塞）
+            if reset_pending and (time.time() - last_published_time >= RESET_HAND_STATUS_TIME):
+                print(f"[MQTT] {RESET_HAND_STATUS_TIME} second(s) elapsed! Auto resetting sensor state to: 'None'")
                 try:
                     mqtt_client.publish(MQTT_TOPIC, "None", retain=True)
                 except Exception as e:
@@ -167,15 +171,15 @@ def run_gesture_recognition():
                     gesture_detected = get_gesture(hand_landmarks)
                     break # 只处理首要探测到的单张手掌
             
-            # 当手势发生变化，且识别到了具体动作（非空闲）时推送
-            if gesture_detected != "None" and gesture_detected != last_published_gesture:
+            # 核心业务控制：只有处于 7 种明确有效手势中，且不等于最后一次推送的手势，才准予触发
+            if gesture_detected in VALID_GESTURES and gesture_detected != last_published_gesture:
                 print(f"[MQTT] Gesture Triggered! New state: '{gesture_detected}'")
                 try:
                     mqtt_client.publish(MQTT_TOPIC, gesture_detected, retain=True)
                 except Exception as e:
                     print(f"[MQTT][ERROR] Publish action state failed: {e}")
                 
-                # 记录最新的触发和开始记录 1 秒倒计时
+                # 记录更新触发，重置状态开始自定义倒数计秒
                 last_published_gesture = gesture_detected
                 last_published_time = time.time()
                 reset_pending = True
