@@ -13,8 +13,5 @@ RUN pip install --no-cache-dir     mediapipe==0.10.11     opencv-python-headless
 # 复制核心 Python 代码进入虚拟机
 COPY app.py /app/app.py
 
-# 强制转换 Windows 下 CRLF 为 Linux LF，彻底解决代码可能的换行格式问题
-RUN sed -i 's/\r$//' /app/app.py
-
 # 直接启动 Python 进程，-u 参数能确保日志实时在 HA 终端更新
 CMD [ "python3", "-u", "/app/app.py" ]
