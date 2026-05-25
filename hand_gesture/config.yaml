@@ -15,7 +15,7 @@ options:
   reconnect_interval: 5
   mqtt_host: "192.168.0.2"
   mqtt_port: 1883
-  mqtt_username: "hmqtt"
+  mqtt_username: "mqtt"
   mqtt_password: "mqtt"
   mqtt_topic: "homeassistant/sensor/hand_gesture/state"
   sensor_name: "手势识别传感器"
