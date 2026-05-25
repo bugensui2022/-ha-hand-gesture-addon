@@ -1,5 +1,5 @@
 name: "Hand Gesture Recognition (with Robust Reconnect & Autodiscover)"
-version: "3.0.0"
+version: "3.5.0"
 slug: "hand_gesture_recognition_single"
 description: "Robust hand gesture recognition using MediaPipe. Automatically restarts stream connection on drop. Registers as Home Assistant Entity using MQTT Discovery."
 arch:
@@ -11,14 +11,15 @@ arch:
 startup: "services"
 boot: "auto"
 options:
-  rtsp_url: "rtsp://192.168.0.100:8554/live"
+  rtsp_url: "rtsp://192.168.0.156:8554/live"
   reconnect_interval: 5
-  mqtt_host: "192.168.0.2"
+  mqtt_host: "192.168.0.1"
   mqtt_port: 1883
   mqtt_username: "mqtt"
   mqtt_password: "mqtt"
   mqtt_topic: "homeassistant/sensor/hand_gesture/state"
   sensor_name: "手势识别传感器"
+  reset_hand_status_time: 2
 schema:
   rtsp_url: "str"
   reconnect_interval: "int"
@@ -28,3 +29,4 @@ schema:
   mqtt_password: "str"
   mqtt_topic: "str"
   sensor_name: "str"
+  reset_hand_status_time: "int"
