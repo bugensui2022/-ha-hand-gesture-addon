@@ -53,7 +53,7 @@ def send_ha_discovery_config():
         "icon": "mdi:gesture-tap-button",
         "device": {
             "identifiers": ["mediapipe_hand_gesture_system"],
-            "name": "手势神经网络识别器",
+            "name": SENSOR_NAME,
             "model": "MediaPipe MLP AutoReset",
             "manufacturer": "Custom HA Addon Developer"
         }
@@ -97,21 +97,31 @@ class RTSPStreamGrabber:
         return self
 
     def _grab_loop(self):
+        consecutive_connect_failures = 0
         while not self.stopped:
-            log_msg("监控画质", f"正在尝试建立与 RTSP 摄像头的物理连接: {self.rtsp_url}")
+            # 只有第1次连不上或建立连接时打印日志，防止掉线后刷屏
+            if consecutive_connect_failures == 0:
+                log_msg("监控画质", f"正在尝试建立与 RTSP 摄像头的物理连接: {self.rtsp_url}")
+            
             cap = cv2.VideoCapture(self.rtsp_url)
             
             # 强化底层配置防止内部排队：设置缓冲区大小为 1，确保 read() 永远拉取最新的无延迟网络流
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
             if not cap.isOpened():
-                log_msg("监控警告", "连接失败！无法打开该 RTSP 视频流。请检查 IP、账号或流路径。")
-                log_msg("监控调度", f"摄像头当前可能离线或被占用。将在 {self.reconnect_interval} 秒后自动尝试重新连接...")
+                if consecutive_connect_failures == 0:
+                    log_msg("监控警告", f"摄像头连接失败或离线！程序将在后台每 {self.reconnect_interval} 秒静默尝试重连...")
+                consecutive_connect_failures += 1
                 cap.release()
                 time.sleep(self.reconnect_interval)
                 continue
                 
-            log_msg("监控成功", "摄像头 RTSP 视频源连接成功！最新秒回流抓取引擎启动中...")
+            if consecutive_connect_failures > 0:
+                log_msg("监控自愈", f"已成功恢复与摄像头 RTSP 视频源的物理连接！(历经 {consecutive_connect_failures} 次静默重试)")
+            else:
+                log_msg("监控成功", "摄像头 RTSP 视频源连接成功！最新秒回流抓取引擎启动中...")
+                
+            consecutive_connect_failures = 0
             self.connected = True
             consecutive_failures = 0
             
@@ -119,7 +129,8 @@ class RTSPStreamGrabber:
                 ret, frame = cap.read()
                 if not ret:
                     consecutive_failures += 1
-                    log_msg("监控警告", f"读取视频流帧数据失败 ({consecutive_failures}/3)")
+                    if consecutive_failures == 1:
+                        log_msg("监控警告", "读取视频流帧数据失败！正在后台静默重试...")
                     if consecutive_failures >= 3:
                         log_msg("监控故障", "视频流帧连续读取失败超限，判定已断线！正在触发自愈重连程序...")
                         self.connected = False
@@ -138,11 +149,11 @@ class RTSPStreamGrabber:
                 
             cap.release()
             self.connected = False
-            log_msg("监控自愈", f"视频管道已释放。等待 {self.reconnect_interval} 秒后自动尝试再次连入...")
+            # 重连等待静默处理，外面已有 log
             time.sleep(self.reconnect_interval)
 
     def read_new_frame(self, timeout=0.1):
-        # 挂起当前线程，等待新物理帧到达。完全不消耗 CPU 资源，摆脱空转造成的 100% CPU 占用
+        # 挂起当前线程，等待新物理帧到达。完全不消耗 CPU 资源，摆退空转造成的 100% CPU 占用
         if self.new_frame_event.wait(timeout):
             with self.lock:
                 self.new_frame_event.clear()
@@ -168,57 +179,83 @@ def run_gesture_recognition():
     # 手势核心几何特征自适应计算
     def get_gesture(hand_landmarks):
         landmarks = hand_landmarks.landmark
-        wrist = landmarks[0]
         
-        # 核心手掌尺度归一化基准（手腕到中指根部 9 的 3D 欧氏距离），彻底消除人体手部伸缩、距离远近造成的尺度误判
-        palm_size = ((landmarks[9].x - wrist.x)**2 + (landmarks[9].y - wrist.y)**2 + (landmarks[9].z - wrist.z)**2)**0.5
-        if palm_size == 0:
-            palm_size = 0.001
+        # 2D Euclidean Distance Helper to avoid noisy Z coord jittering
+        def get_dist_2d(p1, p2):
+            return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
             
-        def get_dist(p1, p2):
-            return ((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)**0.5
+        # 核心手掌尺度归一化基准（手腕到中指 MCP 9 的 2D 欧氏距离），消除人体手部伸缩、距离远近造成的尺度误判
+        palm_size = get_dist_2d(landmarks[9], landmarks[0])
+        if palm_size < 0.01:
+            palm_size = 0.01
             
-        # 多角度、绝对距离归一化自适应判定：4指开合状态（若指尖到手腕距离 > 指关节到手腕距离，则判定为舒展张开）
-        index_open  = get_dist(landmarks[8], wrist)  > (get_dist(landmarks[6], wrist)  + 0.1 * palm_size)
-        middle_open = get_dist(landmarks[12], wrist) > (get_dist(landmarks[10], wrist) + 0.1 * palm_size)
-        ring_open   = get_dist(landmarks[16], wrist) > (get_dist(landmarks[14], wrist) + 0.1 * palm_size)
-        pinky_open  = get_dist(landmarks[20], wrist) > (get_dist(landmarks[18], wrist) + 0.1 * palm_size)
+        # 4指 tip, pip joint, MCP joint 距离手腕的绝对 2D 距离
+        # Tip landmarks: Index(8), Middle(12), Ring(16), Pinky(20)
+        # PIP landmarks: Index(6), Middle(10), Ring(14), Pinky(18)
+        # MCP landmarks: Index(5), Middle(9), Ring(13), Pinky(17)
+        # Wrist is 0
         
-        # 大拇指防抖相对检测：大拇指尖 (4) 到食指根部 (5) 的空间距离
-        thumb_dist = get_dist(landmarks[4], landmarks[5])
-        thumb_open = thumb_dist > (1.1 * palm_size)
+        index_tip_dist  = get_dist_2d(landmarks[8], landmarks[0])
+        index_pip_dist  = get_dist_2d(landmarks[6], landmarks[0])
+        index_mcp_dist  = get_dist_2d(landmarks[5], landmarks[0])
         
-        # 统计开启手指数量
-        open_count = sum([index_open, middle_open, ring_open, pinky_open])
+        middle_tip_dist = get_dist_2d(landmarks[12], landmarks[0])
+        middle_pip_dist = get_dist_2d(landmarks[10], landmarks[0])
+        middle_mcp_dist = get_dist_2d(landmarks[9], landmarks[0])
         
+        ring_tip_dist   = get_dist_2d(landmarks[16], landmarks[0])
+        ring_pip_dist   = get_dist_2d(landmarks[14], landmarks[0])
+        ring_mcp_dist   = get_dist_2d(landmarks[13], landmarks[0])
+        
+        pinky_tip_dist  = get_dist_2d(landmarks[20], landmarks[0])
+        pinky_pip_dist  = get_dist_2d(landmarks[18], landmarks[0])
+        pinky_mcp_dist  = get_dist_2d(landmarks[17], landmarks[0])
+        
+        # 判定开合，加入迟滞保护区间，使临界晃动彻底静音
+        index_open  = (index_tip_dist > index_pip_dist + 0.1 * palm_size) and (index_tip_dist > index_mcp_dist + 0.15 * palm_size)
+        middle_open = (middle_tip_dist > middle_pip_dist + 0.1 * palm_size) and (middle_tip_dist > middle_mcp_dist + 0.15 * palm_size)
+        ring_open   = (ring_tip_dist > ring_pip_dist + 0.1 * palm_size) and (ring_tip_dist > ring_mcp_dist + 0.15 * palm_size)
+        pinky_open  = (pinky_tip_dist > pinky_pip_dist + 0.1 * palm_size) and (pinky_tip_dist > pinky_mcp_dist + 0.15 * palm_size)
+        
+        index_closed  = index_tip_dist < index_pip_dist + 0.02 * palm_size
+        middle_closed = middle_tip_dist < middle_pip_dist + 0.02 * palm_size
+        ring_closed   = ring_tip_dist < ring_pip_dist + 0.02 * palm_size
+        pinky_closed  = pinky_tip_dist < pinky_pip_dist + 0.02 * palm_size
+        
+        # 大拇指防抖相对检测：大拇指尖 (4) 到食指 MCP 关节 (5) 的 2D 空间距离
+        thumb_dist = get_dist_2d(landmarks[4], landmarks[5])
+        thumb_open = thumb_dist > 1.25 * palm_size
+        thumb_closed = thumb_dist < 0.95 * palm_size
+        
+        # 结合手部生理特征，实现7种极致稳定的手势精确匹配
         # 1. 拳头✊ Fist: 全部闭合
-        if open_count == 0 and not thumb_open:
+        if index_closed and middle_closed and ring_closed and pinky_closed and thumb_closed:
             return "✊ Fist"
             
         # 2. 挥手张开👋 Wave: 全部打开
-        if open_count == 4 and thumb_open:
+        if index_open and middle_open and ring_open and pinky_open and thumb_open:
             return "👋 Wave"
             
-        # 3. 剪刀差✌️ Victory: 仅食指中指打开
-        if index_open and middle_open and not ring_open and not pinky_open:
+        # 3. 剪刀差✌️ Victory: 仅食指中指打开，其余闭合
+        if index_open and middle_open and ring_closed and pinky_closed and thumb_closed:
             return "✌️ Victory"
             
-        # 4. 点赞大拇指👍 Thumbs Up / 踩👎 Thumbs Down
-        if thumb_open and open_count == 0:
+        # 4. 点赞大拇指👍 Thumbs Up / 踩👎 Thumbs Down: 仅大拇指打开
+        if thumb_open and index_closed and middle_closed and ring_closed and pinky_closed:
             if landmarks[4].y < landmarks[5].y:
                 return "👍 Thumbs Up"
             else:
                 return "👎 Thumbs Down"
                 
-        # 5. 食指朝上☝️ Point Up
-        if index_open and not middle_open and not ring_open and not pinky_open:
+        # 5. 食指朝上☝️ Point Up: 仅食指打开，其余闭合
+        if index_open and middle_closed and ring_closed and pinky_closed and thumb_closed:
             return "☝️ Point Up"
             
-        # 6. 摇滚🤟 Rock On: 大拇指、食指、小拇指张开
-        if thumb_open and index_open and pinky_open and not middle_open and not ring_open:
+        # 6. 摇滚🤟 Rock On: 大拇指、食指、小拇指张开，中指无名指闭合
+        if thumb_open and index_open and pinky_open and middle_closed and ring_closed:
             return "🤟 Rock On"
             
-        return "Unknown"
+        return "None"
 
     log_msg("算法引擎", "成功初始化手势神经网络模型，单流自适应机制激活")
     connect_mqtt()
@@ -245,14 +282,14 @@ def run_gesture_recognition():
         # 1/3 自定义时间定时复位与冷静期(Cooldown)判定
         if reset_pending:
             if current_time - last_published_time >= RESET_HAND_STATUS_TIME:
-                log_msg("MQTT", f"已达到冷静期/重置时间限制 ({RESET_HAND_STATUS_TIME} 秒)！自动恢复传感器状态为: 'None'")
                 try:
                     mqtt_client.publish(MQTT_TOPIC, "None", retain=True)
+                    log_msg("系统识别", f"已达到冷静重置限制 ({RESET_HAND_STATUS_TIME} 秒)！已自动恢复传感器状态为: 'None'")
                 except Exception as e:
                     log_msg("MQTT错误", f"重置传感器状态同步失败: {e}")
                 last_published_gesture = "None"
                 reset_pending = False
-                # 清除防抖候选器，防止冷静期中偶然发生的半遮挡形态在冷静期结束瞬间意外满足触发常态
+                # 清除防抖候选器
                 current_candidate = "None"
                 candidate_count = 0
             else:
@@ -294,15 +331,14 @@ def run_gesture_recognition():
             else:
                 candidate_count = 0
 
-        # 如果某种有效手势连续稳定出现了足够数量的帧，且不是上一次刚发布过的手势（避免立刻重复发布相同手势）
+        # 如果某种有效手势连续稳定出现了足够数量 of 帧，且不是上一次刚发布过的手势（避免立刻重复发布相同手势）
         if candidate_count >= STABILIZATION_FRAMES:
             gesture_detected = current_candidate
             
             if gesture_detected != last_published_gesture:
-                log_msg("系统识别", f"手势稳定器确认有效手势: '{gesture_detected}'！正在向代理服务器推送物理状态...")
                 try:
                     mqtt_client.publish(MQTT_TOPIC, gesture_detected, retain=True)
-                    log_msg("MQTT", f"推送成功！当前传感器状态已正式设定为: '{gesture_detected}'")
+                    log_msg("系统识别", f"成功感应有效手势: '{gesture_detected}'，已在 MQTT 代理推送成功")
                 except Exception as e:
                     log_msg("MQTT错误", f"手势状态消息推送失败: {e}")
                 
