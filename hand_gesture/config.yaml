@@ -1,5 +1,5 @@
 name: "Hand Gesture Recognition (with Robust Reconnect & Autodiscover)"
-version: "3.5.0"
+version: "3.5.1"
 slug: "hand_gesture_recognition_single"
 description: "Robust hand gesture recognition using MediaPipe. Automatically restarts stream connection on drop. Registers as Home Assistant Entity using MQTT Discovery."
 url: "https://github.com/bugensui2022/-ha-hand-gesture-addon"
