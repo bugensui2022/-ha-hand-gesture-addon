@@ -24,15 +24,15 @@ if os.path.exists(options_path):
         log_msg("错误警告", f"解析 options.json 配置文件出错，将回退到环境变量或默认值: {e}")
 
 # 2. 从本地选项中读取，若无则回退至环境变量或默认值
-RTSP_URL = options.get("rtsp_url", os.getenv("RTSP_URL", "rtsp://192.168.1.100:554/live/main"))
+RTSP_URL = options.get("rtsp_url", os.getenv("RTSP_URL", "rtsp://192.168.0.15:8554/live"))
 RECONNECT_INTERVAL = int(options.get("reconnect_interval", os.getenv("RECONNECT_INTERVAL", 5)))
-MQTT_HOST = options.get("mqtt_host", os.getenv("MQTT_HOST", "192.168.1.5"))
+MQTT_HOST = options.get("mqtt_host", os.getenv("MQTT_HOST", "192.168.0.16"))
 MQTT_PORT = int(options.get("mqtt_port", os.getenv("MQTT_PORT", 1883)))
-MQTT_USER = options.get("mqtt_username", os.getenv("MQTT_USERNAME", "homeassistant"))
-MQTT_PASS = options.get("mqtt_password", os.getenv("MQTT_PASSWORD", "secure_password"))
+MQTT_USER = options.get("mqtt_username", os.getenv("MQTT_USERNAME", "mqtt"))
+MQTT_PASS = options.get("mqtt_password", os.getenv("MQTT_PASSWORD", "mqtt"))
 MQTT_TOPIC = options.get("mqtt_topic", os.getenv("MQTT_TOPIC", "homeassistant/sensor/hand_gesture/state"))
 SENSOR_NAME = options.get("sensor_name", os.getenv("SENSOR_NAME", "手势识别传感器"))
-RESET_HAND_STATUS_TIME = float(options.get("reset_hand_status_time", os.getenv("RESET_HAND_STATUS_TIME", 1)))
+RESET_HAND_STATUS_TIME = float(options.get("reset_hand_status_time", os.getenv("RESET_HAND_STATUS_TIME", 3)))
 
 # 根据 MQTT 传感器主题自动解析发现配置主题
 discovery_topic = "homeassistant/sensor/hand_gesture/config"
@@ -161,8 +161,8 @@ def run_gesture_recognition():
     hands = mp_hands.Hands(
         static_image_mode=False,
         max_num_hands=1,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_detection_confidence=0.8,  # 提高检测置信度至 0.8，防止环境背景噪声及弱阴影误判为手部
+        min_tracking_confidence=0.8   # 提高跟踪置信度至 0.8，防止手势运动期间骨架抖动异动引起的误判定
     )
     
     # 手势核心几何特征自适应计算
@@ -226,7 +226,7 @@ def run_gesture_recognition():
     # 启动后台秒级无延迟视频拉流处理器
     grabber = RTSPStreamGrabber(RTSP_URL, RECONNECT_INTERVAL).start()
 
-    # 实体状态更新记录，用于实现精准、自适应及时的自动复位控制
+    # 实体状态更新记录，用于实现精准、自适应及时的自动复位控制与手势冷静期
     last_published_gesture = "None"
     last_published_time = 0.0
     reset_pending = False
@@ -234,16 +234,32 @@ def run_gesture_recognition():
     # 预设的可执行高识别率手势
     VALID_GESTURES = ["✊ Fist", "👋 Wave", "✌️ Victory", "👍 Thumbs Up", "👎 Thumbs Down", "☝️ Point Up", "🤟 Rock On"]
 
+    # 引入手势平滑防抖引擎：连续 N 帧识别一致才判定为有效手势，彻底杜绝过渡性晃动或手势切换时产生的误判触发
+    STABILIZATION_FRAMES = 5
+    current_candidate = "None"
+    candidate_count = 0
+
     while True:
-        # 1/3 自定义时间定时复位判定部分
-        if reset_pending and (time.time() - last_published_time >= RESET_HAND_STATUS_TIME):
-            log_msg("MQTT", f"已达到重置倒计时 {RESET_HAND_STATUS_TIME} 秒！自动恢复传感器状态为: 'None'")
-            try:
-                mqtt_client.publish(MQTT_TOPIC, "None", retain=True)
-            except Exception as e:
-                log_msg("MQTT错误", f"重置传感器状态同步失败: {e}")
-            last_published_gesture = "None"
-            reset_pending = False
+        current_time = time.time()
+
+        # 1/3 自定义时间定时复位与冷静期(Cooldown)判定
+        if reset_pending:
+            if current_time - last_published_time >= RESET_HAND_STATUS_TIME:
+                log_msg("MQTT", f"已达到冷静期/重置时间限制 ({RESET_HAND_STATUS_TIME} 秒)！自动恢复传感器状态为: 'None'")
+                try:
+                    mqtt_client.publish(MQTT_TOPIC, "None", retain=True)
+                except Exception as e:
+                    log_msg("MQTT错误", f"重置传感器状态同步失败: {e}")
+                last_published_gesture = "None"
+                reset_pending = False
+                # 清除防抖候选器，防止冷静期中偶然发生的半遮挡形态在冷静期结束瞬间意外满足触发常态
+                current_candidate = "None"
+                candidate_count = 0
+            else:
+                # 仍处于手势冷静期内部，忽略新手势识别，充分利用 CPU 算力
+                # 精准读取新帧防止多线程 grabber 发送事件阻塞溢出
+                ret, frame = grabber.read_new_frame(timeout=0.05)
+                continue
 
         # 2/3 获取最新刚出炉的物理帧（采用线程事件，阻塞挂起，极简省主频算力）
         ret, frame = grabber.read_new_frame(timeout=0.05)
@@ -254,25 +270,50 @@ def run_gesture_recognition():
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = hands.process(rgb_frame)
         
-        gesture_detected = "None"
+        # 确定本帧的最优手势匹配
+        raw_gesture = "None"
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                gesture_detected = get_gesture(hand_landmarks)
+                raw_gesture = get_gesture(hand_landmarks)
                 break # 实时高主频，每一帧仅分析首个检测到的主力手部
         
-        # 核心防抖控制：只有在 7 种有效手势中，且其不等于前一次触发的消息时，才予发送
-        if gesture_detected in VALID_GESTURES and gesture_detected != last_published_gesture:
-            log_msg("系统识别", f"成功感应手势: '{gesture_detected}'！正在向代理服务器推送物理状态...")
-            try:
-                mqtt_client.publish(MQTT_TOPIC, gesture_detected, retain=True)
-                log_msg("MQTT", f"推送成功！当前传感器状态已正式设定为: '{gesture_detected}'")
-            except Exception as e:
-                log_msg("MQTT错误", f"手势状态消息推送失败: {e}")
+        # 将 "Unknown" 或非有效手势，统一规整为 "None" 以支持精准判定
+        if raw_gesture not in VALID_GESTURES:
+            raw_gesture = "None"
+
+        # 手势平滑防抖过滤：
+        if raw_gesture == current_candidate:
+            if current_candidate != "None":
+                candidate_count += 1
+            else:
+                candidate_count = 0 # None 无需累加防抖帧
+        else:
+            current_candidate = raw_gesture
+            if current_candidate != "None":
+                candidate_count = 1
+            else:
+                candidate_count = 0
+
+        # 如果某种有效手势连续稳定出现了足够数量的帧，且不是上一次刚发布过的手势（避免立刻重复发布相同手势）
+        if candidate_count >= STABILIZATION_FRAMES:
+            gesture_detected = current_candidate
             
-            # 更新运行统计与触发记录
-            last_published_gesture = gesture_detected
-            last_published_time = time.time()
-            reset_pending = True
+            if gesture_detected != last_published_gesture:
+                log_msg("系统识别", f"手势稳定器确认有效手势: '{gesture_detected}'！正在向代理服务器推送物理状态...")
+                try:
+                    mqtt_client.publish(MQTT_TOPIC, gesture_detected, retain=True)
+                    log_msg("MQTT", f"推送成功！当前传感器状态已正式设定为: '{gesture_detected}'")
+                except Exception as e:
+                    log_msg("MQTT错误", f"手势状态消息推送失败: {e}")
+                
+                # 激活冷静期/复位倒计时
+                last_published_gesture = gesture_detected
+                last_published_time = time.time()
+                reset_pending = True
+                
+                # 重置候选状态
+                current_candidate = "None"
+                candidate_count = 0
 
 if __name__ == "__main__":
     try:
