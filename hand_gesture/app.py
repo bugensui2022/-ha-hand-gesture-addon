@@ -2,6 +2,7 @@ import os
 # 阻断 FFmpeg / OpenCV 的底层 C++ 报错刷屏，保持终端日志纯净
 os.environ["OPENCV_LOG_LEVEL"] = "OFF"
 os.environ["FFMPEG_LOG_LEVEL"] = "quiet"
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
 import time
 import json
 import cv2
