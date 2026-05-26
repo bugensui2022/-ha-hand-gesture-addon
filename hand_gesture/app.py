@@ -1,4 +1,7 @@
 import os
+# 阻断 FFmpeg / OpenCV 的底层 C++ 报错刷屏，保持终端日志纯净
+os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+os.environ["FFMPEG_LOG_LEVEL"] = "quiet"
 import time
 import json
 import cv2
@@ -227,31 +230,36 @@ def run_gesture_recognition():
         thumb_open = thumb_dist > 1.25 * palm_size
         thumb_closed = thumb_dist < 0.95 * palm_size
         
-        # 结合手部生理特征，实现7种极致稳定的手势精确匹配
+        # 结合手部生理特征，实现8种极致稳定的手势精确匹配
         # 1. 拳头✊ Fist: 全部闭合
         if index_closed and middle_closed and ring_closed and pinky_closed and thumb_closed:
             return "✊ Fist"
             
-        # 2. 挥手张开👋 Wave: 全部打开
+        # 2. OK手势👌 OK: 食指尖与大拇指尖接触形成圆圈，中指、无名指、小指张开
+        thumb_index_dist = get_dist_2d(landmarks[4], landmarks[8])
+        if thumb_index_dist < 0.22 * palm_size and middle_open and ring_open and pinky_open:
+            return "👌 OK"
+            
+        # 3. 挥手张开👋 Wave: 全部打开
         if index_open and middle_open and ring_open and pinky_open and thumb_open:
             return "👋 Wave"
             
-        # 3. 剪刀差✌️ Victory: 仅食指中指打开，其余闭合
+        # 4. 剪刀差✌️ Victory: 仅食指中指打开，其余闭合
         if index_open and middle_open and ring_closed and pinky_closed and thumb_closed:
             return "✌️ Victory"
             
-        # 4. 点赞大拇指👍 Thumbs Up / 踩👎 Thumbs Down: 仅大拇指打开
+        # 5. 点赞大拇指👍 Thumbs Up / 踩👎 Thumbs Down: 仅大拇指打开
         if thumb_open and index_closed and middle_closed and ring_closed and pinky_closed:
             if landmarks[4].y < landmarks[5].y:
                 return "👍 Thumbs Up"
             else:
                 return "👎 Thumbs Down"
                 
-        # 5. 食指朝上☝️ Point Up: 仅食指打开，其余闭合
+        # 6. 食指朝上☝️ Point Up: 仅食指打开，其余闭合
         if index_open and middle_closed and ring_closed and pinky_closed and thumb_closed:
             return "☝️ Point Up"
             
-        # 6. 摇滚🤟 Rock On: 大拇指、食指、小拇指张开，中指无名指闭合
+        # 7. 摇滚🤟 Rock On: 大拇指、食指、小拇指张开，中指无名指闭合
         if thumb_open and index_open and pinky_open and middle_closed and ring_closed:
             return "🤟 Rock On"
             
@@ -269,7 +277,7 @@ def run_gesture_recognition():
     reset_pending = False
 
     # 预设的可执行高识别率手势
-    VALID_GESTURES = ["✊ Fist", "👋 Wave", "✌️ Victory", "👍 Thumbs Up", "👎 Thumbs Down", "☝️ Point Up", "🤟 Rock On"]
+    VALID_GESTURES = ["✊ Fist", "👋 Wave", "✌️ Victory", "👍 Thumbs Up", "👎 Thumbs Down", "☝️ Point Up", "🤟 Rock On", "👌 OK"]
 
     # 引入手势平滑防抖引擎：连续 N 帧识别一致才判定为有效手势，彻底杜绝过渡性晃动或手势切换时产生的误判触发
     STABILIZATION_FRAMES = 5
