@@ -89,8 +89,8 @@ def send_ha_discovery_config():
     }
     
     try:
-        mqtt_client.publish(discovery_topic, json.dumps(discovery_payload), retain=True)
-        mqtt_client.publish(discovery_topic_conn, json.dumps(discovery_payload_conn), retain=True)
+        mqtt_client.publish(discovery_topic, json.dumps(discovery_payload).encode('utf-8'), retain=True)
+        mqtt_client.publish(discovery_topic_conn, json.dumps(discovery_payload_conn).encode('utf-8'), retain=True)
         log_msg("MQTT通信", f"成功注册实体！Home Assistant 传感器与 '已连接/已断开' 状态实体已同步发布")
     except Exception as e:
         log_msg("MQTT错误", f"发送自动发现配置失败: {e}")
@@ -153,7 +153,7 @@ class RTSPStreamGrabber:
             consecutive_connect_failures = 0
             self.connected = True
             try:
-                mqtt_client.publish(MQTT_TOPIC_CONN, "ON", retain=True)
+                mqtt_client.publish(MQTT_TOPIC_CONN, "ON".encode('utf-8'), retain=True)
             except:
                 pass
             consecutive_failures = 0
@@ -168,7 +168,7 @@ class RTSPStreamGrabber:
                         log_msg("监控故障", "视频流帧连续读取失败超限，判定已断线！正在触发自愈重连程序...")
                         self.connected = False
                         try:
-                            mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+                            mqtt_client.publish(MQTT_TOPIC_CONN, "OFF".encode('utf-8'), retain=True)
                         except:
                             pass
                         break
@@ -188,7 +188,7 @@ class RTSPStreamGrabber:
             if self.connected:
                 self.connected = False
                 try:
-                    mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+                    mqtt_client.publish(MQTT_TOPIC_CONN, "OFF".encode('utf-8'), retain=True)
                 except:
                     pass
             # 重连等待静默处理，外面已有 log
@@ -312,7 +312,7 @@ def run_gesture_recognition():
     
     # 初始发送一次离线状态，等待连接自愈
     try:
-        mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+        mqtt_client.publish(MQTT_TOPIC_CONN, "OFF".encode('utf-8'), retain=True)
     except:
         pass
 
@@ -336,7 +336,7 @@ def run_gesture_recognition():
         if reset_pending:
             if current_time - last_published_time >= RESET_HAND_STATUS_TIME:
                 try:
-                    mqtt_client.publish(MQTT_TOPIC, "None", retain=True)
+                    mqtt_client.publish(MQTT_TOPIC, "None".encode('utf-8'), retain=True)
                     log_msg("系统识别", f"已达到冷静重置限制 ({RESET_HAND_STATUS_TIME} 秒)！已自动恢复传感器状态为: 'None'")
                 except Exception as e:
                     log_msg("MQTT错误", f"重置传感器状态同步失败: {e}")
@@ -390,7 +390,7 @@ def run_gesture_recognition():
             
             if gesture_detected != last_published_gesture:
                 try:
-                    mqtt_client.publish(MQTT_TOPIC, gesture_detected, retain=True)
+                    mqtt_client.publish(MQTT_TOPIC, gesture_detected.encode('utf-8'), retain=True)
                     log_msg("系统识别", f"成功感应有效手势: '{gesture_detected}'，已在 MQTT 代理推送成功")
                 except Exception as e:
                     log_msg("MQTT错误", f"手势状态消息推送失败: {e}")
