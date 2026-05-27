@@ -3,6 +3,15 @@ import os
 os.environ["OPENCV_LOG_LEVEL"] = "OFF"
 os.environ["FFMPEG_LOG_LEVEL"] = "quiet"
 os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+
+import sys
+# 终极物理静默：将 stderr (文件句柄 2) 彻底定向到空设备，阻断 C++ 库的直接输出
+try:
+    stderr_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(stderr_fd, 2)
+except Exception:
+    pass
+
 import time
 import json
 import cv2
@@ -40,6 +49,8 @@ RESET_HAND_STATUS_TIME = float(options.get("reset_hand_status_time", os.getenv("
 
 # 根据 MQTT 传感器主题自动解析发现配置主题
 discovery_topic = "homeassistant/sensor/hand_gesture/config"
+discovery_topic_conn = "homeassistant/binary_sensor/hand_gesture_conn/config"
+MQTT_TOPIC_CONN = MQTT_TOPIC.replace("/state", "/connection")
 
 # 初始化配置 MQTT 客户端
 mqtt_client = mqttFactory.Client()
@@ -49,24 +60,38 @@ if MQTT_USER and MQTT_PASS:
 # 自动发现注册载荷
 def send_ha_discovery_config():
     """发送 Home Assistant 自动发现 JSON 消息，无需人工手动修改 YAML"""
+    device_info = {
+        "identifiers": ["mediapipe_hand_gesture_system"],
+        "name": SENSOR_NAME,
+        "model": "MediaPipe MLP AutoReset",
+        "manufacturer": "Custom HA Addon Developer"
+    }
+
+    # 1. 手势传感器注册
     discovery_payload = {
         "name": SENSOR_NAME,
         "unique_id": "mediapipe_hand_gesture_sensor",
         "state_topic": MQTT_TOPIC,
         "value_template": "{{ value }}",
         "icon": "mdi:gesture-tap-button",
-        "device": {
-            "identifiers": ["mediapipe_hand_gesture_system"],
-            "name": SENSOR_NAME,
-            "model": "MediaPipe MLP AutoReset",
-            "manufacturer": "Custom HA Addon Developer"
-        }
+        "device": device_info
     }
     
-    log_msg("MQTT通信", f"正在向主题 '{discovery_topic}' 发送 HA 实体自动发现注册信息...")
+    # 2. 视频流连接状态传感器注册 (Binary Sensor)
+    discovery_payload_conn = {
+        "name": SENSOR_NAME + " 视频流连接状态",
+        "unique_id": "mediapipe_hand_gesture_connection",
+        "state_topic": MQTT_TOPIC_CONN,
+        "device_class": "connectivity",
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "device": device_info
+    }
+    
     try:
         mqtt_client.publish(discovery_topic, json.dumps(discovery_payload), retain=True)
-        log_msg("MQTT通信", f"成功注册实体！Home Assistant 传感器设备 '{SENSOR_NAME}' 注册载荷发送完毕")
+        mqtt_client.publish(discovery_topic_conn, json.dumps(discovery_payload_conn), retain=True)
+        log_msg("MQTT通信", f"成功注册实体！Home Assistant 传感器与 '已连接/已断开' 状态实体已同步发布")
     except Exception as e:
         log_msg("MQTT错误", f"发送自动发现配置失败: {e}")
 
@@ -127,6 +152,10 @@ class RTSPStreamGrabber:
                 
             consecutive_connect_failures = 0
             self.connected = True
+            try:
+                mqtt_client.publish(MQTT_TOPIC_CONN, "ON", retain=True)
+            except:
+                pass
             consecutive_failures = 0
             
             while not self.stopped:
@@ -138,6 +167,10 @@ class RTSPStreamGrabber:
                     if consecutive_failures >= 3:
                         log_msg("监控故障", "视频流帧连续读取失败超限，判定已断线！正在触发自愈重连程序...")
                         self.connected = False
+                        try:
+                            mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+                        except:
+                            pass
                         break
                     time.sleep(1)
                     continue
@@ -152,7 +185,12 @@ class RTSPStreamGrabber:
                 time.sleep(0.001)
                 
             cap.release()
-            self.connected = False
+            if self.connected:
+                self.connected = False
+                try:
+                    mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+                except:
+                    pass
             # 重连等待静默处理，外面已有 log
             time.sleep(self.reconnect_interval)
 
@@ -271,6 +309,12 @@ def run_gesture_recognition():
 
     # 启动后台秒级无延迟视频拉流处理器
     grabber = RTSPStreamGrabber(RTSP_URL, RECONNECT_INTERVAL).start()
+    
+    # 初始发送一次离线状态，等待连接自愈
+    try:
+        mqtt_client.publish(MQTT_TOPIC_CONN, "OFF", retain=True)
+    except:
+        pass
 
     # 实体状态更新记录，用于实现精准、自适应及时的自动复位控制与手势冷静期
     last_published_gesture = "None"
