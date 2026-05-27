@@ -164,8 +164,8 @@ class RTSPStreamGrabber:
                     consecutive_failures += 1
                     if consecutive_failures == 1:
                         log_msg("监控警告", "读取视频流帧数据失败！正在后台静默重试...")
-                    if consecutive_failures >= 3:
-                        log_msg("监控故障", "视频流帧连续读取失败超限，判定已断线！正在触发自愈重连程序...")
+                    if consecutive_failures >= 1:
+                        log_msg("监控故障", "视频流帧读取失败，判定已断线！正在触发自愈重连程序...")
                         self.connected = False
                         try:
                             mqtt_client.publish(MQTT_TOPIC_CONN, "OFF".encode('utf-8'), retain=True)
@@ -390,7 +390,9 @@ def run_gesture_recognition():
             
             if gesture_detected != last_published_gesture:
                 try:
-                    mqtt_client.publish(MQTT_TOPIC, gesture_detected.encode('utf-8'), retain=True)
+                    # 提取纯净的手势代号用于 MQTT 自动化 (例如 "Victory")，日志保留表情符号
+                    mqtt_gesture = gesture_detected.split(' ')[-1] if ' ' in gesture_detected else gesture_detected
+                    mqtt_client.publish(MQTT_TOPIC, mqtt_gesture.encode('utf-8'), retain=True)
                     log_msg("系统识别", f"成功感应有效手势: '{gesture_detected}'，已在 MQTT 代理推送成功")
                 except Exception as e:
                     log_msg("MQTT错误", f"手势状态消息推送失败: {e}")
