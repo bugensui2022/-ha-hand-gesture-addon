@@ -1,5 +1,5 @@
 name: "Hand Gesture Recognition (Robust & Auto-detect 8 Gestures)"
-version: "3.9"
+version: "3.9.1"
 slug: "hand_gesture_recognition_single"
 description: "基于 Google MediaPipe 的高性能手势识别加载项。支持 8 种高稳定低延迟手势交互：握拳 (✊ Fist)、张开挥手 (👋 Wave)、剪刀手 (✌️ Victory)、点赞 (👍 Thumbs Up)、踩 (👎 Thumbs Down)、食指指向 (☝️ Point Up)、摇滚 (🤟 Rock On)、OK手势 (👌 OK)。具备极致的单流自适应无延迟静默重连、None 1秒防抖自动复位、冷静期机制、Home Assistant MQTT 实体自动发现，即插即用。"
 url: "https://github.com/bugensui2022/-ha-hand-gesture-addon"
