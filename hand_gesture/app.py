@@ -325,7 +325,7 @@ def run_gesture_recognition():
     VALID_GESTURES = ["✊ Fist", "👋 Wave", "✌️ Victory", "👍 Thumbs Up", "👎 Thumbs Down", "☝️ Point Up", "🤟 Rock On", "👌 OK"]
 
     # 引入手势平滑防抖引擎：连续 N 帧识别一致才判定为有效手势，彻底杜绝过渡性晃动或手势切换时产生的误判触发
-    STABILIZATION_FRAMES = 8
+    STABILIZATION_FRAMES = 10
     current_candidate = "None"
     candidate_count = 0
 
