@@ -15,7 +15,7 @@ try {
         process.exit(1);
     }
 } catch (e) {
-    console.error('配置文件读取失败:', e.message);
+    console.error('解析配置文件失败:', e.message);
     process.exit(1);
 }
 
@@ -68,7 +68,7 @@ function publishDiscovery() {
         model: 'L2Ping Presence Tracker'
     };
 
-    // 1. Device Tracker (物理在场状态)
+    // 1. Device Tracker (Presence)
     const trackerPayload = {
         name: '漫步者蓝牙',
         state_topic: stateTrackerTopic,
@@ -79,7 +79,7 @@ function publishDiscovery() {
         device: deviceBase
     };
 
-    // 2. Binary Sensor (蓝牙逻辑连接状态)
+    // 2. Binary Sensor (Connection)
     const connPayload = {
         name: '漫步者蓝牙连接状态',
         state_topic: stateConnTopic,
@@ -98,7 +98,7 @@ function publishDiscovery() {
 
 function checkConnection() {
     return new Promise((resolve) => {
-        exec(`hcitool -i ${adapter_id} con`, (err, stdout) => {
+        exec(`/usr/bin/hcitool -i ${adapter_id} con`, (err, stdout) => {
             if (err) {
                 resolve(false);
                 return;
@@ -110,23 +110,23 @@ function checkConnection() {
 }
 
 function tryConnect() {
-    if (isAttemptingConnection || isCurrentlyConnected || !isCurrentlyPresent) return;
+    if (isAttemptingConnection || isCurrentlyConnected) return;
 
     isAttemptingConnection = true;
-    console.log(`[连接] 正在尝试连接蓝牙设备 ${target_mac}...`);
+    console.log(`[连接] 尝试连接到设备 ${target_mac}...`);
 
-    exec(`bluetoothctl connect ${target_mac}`, { timeout: 10000 }, async (err) => {
+    exec(`/usr/bin/bluetoothctl connect ${target_mac}`, { timeout: 10000 }, async (err, stdout) => {
         isAttemptingConnection = false;
         const nowConnected = await checkConnection();
         
         if (nowConnected) {
-            console.log(`[成功] 蓝牙连接已建立！`);
+            console.log(`[成功] 已成功建立蓝牙连接！`);
             if (connectionRetryTimer) {
                 clearInterval(connectionRetryTimer);
                 connectionRetryTimer = null;
             }
         } else {
-            console.log(`[重试] 连接未成功，等待 2 秒后重试...`);
+            console.log(`[失败] 连接尝试未成功，2秒后重试...`);
             if (!connectionRetryTimer) {
                 connectionRetryTimer = setInterval(tryConnect, 2000);
             }
@@ -135,15 +135,13 @@ function tryConnect() {
 }
 
 async function updateStates(isPresent) {
-    // 物理在场逻辑（通过 l2ping）
     if (isPresent) {
         presenceFailures = 0;
         if (!isCurrentlyPresent) {
             isCurrentlyPresent = true;
-            console.log(`[在场] 设备上线: ${target_mac}`);
+            console.log(`[状态] 设备上线: ${target_mac}`);
             client.publish(stateTrackerTopic, 'home', { retain: true });
             
-            // 发现设备后，延迟指定秒数开始主动连接
             setTimeout(() => {
                 if (isCurrentlyPresent && !isCurrentlyConnected) {
                     tryConnect();
@@ -154,10 +152,9 @@ async function updateStates(isPresent) {
         presenceFailures++;
         if (presenceFailures >= offline_tolerance && isCurrentlyPresent) {
             isCurrentlyPresent = false;
-            console.log(`[在场] 设备离线: ${target_mac}`);
+            console.log(`[状态] 设备离线 (已连续失败 ${presenceFailures} 次): ${target_mac}`);
             client.publish(stateTrackerTopic, 'not_home', { retain: true });
             
-            // 离线后停止所有连接重试
             if (connectionRetryTimer) {
                 clearInterval(connectionRetryTimer);
                 connectionRetryTimer = null;
@@ -165,7 +162,6 @@ async function updateStates(isPresent) {
         }
     }
 
-    // 连接状态逻辑（通过 hcitool con）
     const connected = await checkConnection();
     if (connected !== isCurrentlyConnected) {
         isCurrentlyConnected = connected;
@@ -173,7 +169,6 @@ async function updateStates(isPresent) {
         client.publish(stateConnTopic, state, { retain: true });
         console.log(`[连接] 状态变更: ${connected ? '已连接' : '已断开'}`);
         
-        // 如果物理在场但连接意外断开，开启自动重连
         if (isCurrentlyPresent && !connected && !connectionRetryTimer && !isAttemptingConnection) {
             tryConnect();
         }
@@ -181,28 +176,32 @@ async function updateStates(isPresent) {
 }
 
 function scan() {
-    // 确保蓝牙适配器处于开启状态
-    exec(`hciconfig ${adapter_id} up`, (err) => {
+    exec(`/usr/bin/hciconfig ${adapter_id} up`, (err) => {
         if (err) {
-            console.error(`[警告] 适配器 ${adapter_id} 启动失败:`, err.message);
+            exec(`hciconfig ${adapter_id} up`, (err2) => {
+               if (err2) console.error(`[警告] 适配器 ${adapter_id} 启动失败:`, err2.message);
+            });
         }
 
-        // 使用 l2ping 进行极速在场检测
-        exec(`l2ping -i ${adapter_id} -c 1 -t 2 ${target_mac}`, async (err, stdout) => {
-            const isPresent = !err && stdout && stdout.includes('bytes from');
-            await updateStates(isPresent);
+        exec(`/usr/bin/l2ping -i ${adapter_id} -c 1 -t 2 ${target_mac}`, async (err, stdout) => {
+            let isPresent = !err && stdout && stdout.includes('bytes from');
+            
+            if (err && err.message.includes('not found')) {
+                exec(`l2ping -i ${adapter_id} -c 1 -t 2 ${target_mac}`, async (err3, stdout3) => {
+                    isPresent = !err3 && stdout3 && stdout3.includes('bytes from');
+                    await updateStates(isPresent);
+                });
+            } else {
+                await updateStates(isPresent);
+            }
         });
     });
 }
 
 client.on('connect', () => {
-    console.log('[MQTT] 成功连接到 Mosquitto');
+    console.log('[MQTT] 成功连接到 Broker');
     publishDiscovery();
-    
-    // 立即执行一次扫描
     scan();
-    
-    // 开启定时扫描
     setInterval(scan, scan_interval * 1000);
 });
 
@@ -210,15 +209,15 @@ client.on('error', (err) => {
     console.error('[MQTT] 错误:', err.message);
 });
 
-// 优雅退出处理
 process.on('SIGTERM', () => {
-    console.log('[系统] 收到关闭信号，正在清理...');
+    console.log('[系统] 收到 SIGTERM，正在关闭...');
     if (connectionRetryTimer) clearInterval(connectionRetryTimer);
     client.end(true, () => {
+        console.log('[系统] 已断开 MQTT，正常退出');
         process.exit(0);
     });
 });
 
 process.on('unhandledRejection', (reason) => {
-    console.error('[错误] 未处理的异常:', reason);
+    console.error('[错误] 未处理的拒绝:', reason);
 });
