@@ -1,7 +1,7 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
+ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# 安装运行环境
+# 安装必要的工具：nodejs, npm, 蓝牙工具, dbus
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -11,11 +11,12 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# 复制文件
-COPY package.json index.js ./
+# 复制应用文件
+COPY package.json .
+COPY index.js .
 
-# 安装依赖
+# 生产环境安装依赖
 RUN npm install --production
 
-# 启动脚本
+# 启动程序
 CMD [ "node", "index.js" ]
