@@ -7,7 +7,7 @@ let options;
 try {
     options = JSON.parse(fs.readFileSync('/data/options.json', 'utf8'));
 } catch (e) {
-    console.error('无法从 /data/options.json 读取配置');
+    console.error('无法读取配置文件 /data/options.json');
     process.exit(1);
 }
 
@@ -33,7 +33,7 @@ const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
     reconnectPeriod: 5000 // 5秒自动重连
 });
 
-// 发布 HA 自动发现配置
+// 发布 HA 自动发现信息
 function publishDiscovery() {
     const payload = {
         name: `蓝牙在线状态 (${target_mac})`,
@@ -51,14 +51,15 @@ function publishDiscovery() {
     client.publish(configTopic, JSON.stringify(payload), { retain: true });
 }
 
-// 执行蓝牙扫描
+// 扫描逻辑
 function scan() {
-    // 确保适配器已启动
+    // 确保蓝牙适配器已启用
     exec(`hciconfig ${adapter_id} up`, (err) => {
-        if (err) console.error(`启动适配器 ${adapter_id} 失败:`, err);
+        if (err) console.error(`激活适配器 ${adapter_id} 失败:`, err);
 
-        // 使用经典蓝牙 hcitool 扫描
+        // 使用 hcitool name 进行经典蓝牙扫描（获取设备友好名）
         exec(`hcitool -i ${adapter_id} name ${target_mac}`, { timeout: 10000 }, (err, stdout) => {
+            // 如果能返回名字，说明设备在线
             const isPresent = stdout && stdout.trim().length > 0;
             const state = isPresent ? 'ON' : 'OFF';
             
@@ -72,10 +73,10 @@ client.on('connect', () => {
     console.log('已连接到 MQTT Broker');
     publishDiscovery();
     
-    // 立即执行一次扫描
+    // 执行初始扫描
     scan();
     
-    // 设置定时循环扫描
+    // 开启定时扫描
     setInterval(scan, scan_interval * 1000);
 });
 
