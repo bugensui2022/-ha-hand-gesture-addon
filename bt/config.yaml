@@ -1,7 +1,7 @@
 name: "Bluetooth Classic Presence"
-version: "1.0.8"
+version: "1.0.9"
 slug: "bluetooth_classic_presence"
-description: "使用 l2ping 的高性能经典蓝牙在场追踪器 (device_tracker)，支持自定义容错"
+description: "使用 l2ping 的高性能经典蓝牙设备追踪器 (device_tracker)，支持 HA 重启状态恢复"
 arch:
   - aarch64
   - amd64
@@ -17,12 +17,12 @@ devices:
 options:
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_password: ""
+  mqtt_user: "mqtt"
+  mqtt_password: "mqtt"
   target_mac: "FC:E8:06:19:19:E3"
-  scan_interval: 2
-  offline_tolerance: 3
+  scan_interval: 5
   adapter_id: "hci0"
+  offline_tolerance: 3
 schema:
   mqtt_host: str
   mqtt_port: int
@@ -30,5 +30,5 @@ schema:
   mqtt_password: password?
   target_mac: str
   scan_interval: int
-  offline_tolerance: int
   adapter_id: str
+  offline_tolerance: int
