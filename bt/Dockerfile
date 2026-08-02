@@ -1,13 +1,7 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM $BUILD_FROM
+FROM node:20-alpine
 
-# 环境变量，告知 s6 不要接管控制权或以简单模式运行
-ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
-
-# 安装环境
+# 安装蓝牙工具和基础依赖
 RUN apk add --no-cache \
-    nodejs \
-    npm \
     bluez \
     bluez-deprecated \
     dbus \
@@ -22,5 +16,5 @@ COPY index.js .
 # 安装依赖
 RUN npm install --production
 
-# 启动命令
-CMD [ "node", "/app/index.js" ]
+# 启动脚本
+CMD [ "node", "index.js" ]
