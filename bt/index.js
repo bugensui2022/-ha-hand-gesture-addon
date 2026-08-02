@@ -2,20 +2,24 @@ const mqtt = require('mqtt');
 const { exec } = require('child_process');
 const fs = require('fs');
 
-console.log('--- 蓝牙扫描加载项启动中 ---');
+console.log('======================================');
+console.log('   蓝牙经典在线扫描插件 (v1.0.5) 启动中');
+console.log('======================================');
 
-// 读取 HA 配置
-let options;
-try {
-    const configPath = '/data/options.json';
-    if (fs.existsSync(configPath)) {
-        options = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } else {
-        console.error('错误: 找不到配置文件 /data/options.json');
+// 读取 HA 插件配置
+const CONFIG_PATH = '/data/options.json';
+let options = {};
+
+if (fs.existsSync(CONFIG_PATH)) {
+    try {
+        options = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        console.log('成功加载配置文件');
+    } catch (e) {
+        console.error('解析配置文件失败:', e.message);
         process.exit(1);
     }
-} catch (e) {
-    console.error('解析配置文件失败:', e.message);
+} else {
+    console.error('未找到配置文件 /data/options.json，请确认插件设置已保存');
     process.exit(1);
 }
 
@@ -34,14 +38,17 @@ const deviceId = `bt_presence_${cleanMac}`;
 const stateTopic = `homeassistant/binary_sensor/${deviceId}/state`;
 const configTopic = `homeassistant/binary_sensor/${deviceId}/config`;
 
-// MQTT 客户端设置
-const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
+// MQTT 选项
+const mqttOptions = {
+    port: mqtt_port || 1883,
     username: mqtt_user || undefined,
     password: mqtt_password || undefined,
     reconnectPeriod: 5000
-});
+};
 
-// 发布 HA 自动发现配置
+console.log(`尝试连接到 MQTT Broker: ${mqtt_host}:${mqtt_port}`);
+const client = mqtt.connect(`mqtt://${mqtt_host}`, mqttOptions);
+
 function publishDiscovery() {
     const payload = {
         name: `蓝牙在线状态 (${target_mac})`,
@@ -58,36 +65,46 @@ function publishDiscovery() {
         }
     };
     client.publish(configTopic, JSON.stringify(payload), { retain: true });
-    console.log(`已发送 HA 自动发现配置到: ${configTopic}`);
+    console.log(`已发布 HA 实体发现信息`);
 }
 
-// 执行扫描
 function scan() {
+    // 强制开启蓝牙适配器
     exec(`hciconfig ${adapter_id} up`, (err) => {
-        if (err) console.error(`警告: 无法开启适配器 ${adapter_id}:`, err.message);
+        if (err) {
+            console.error(`[${new Date().toLocaleTimeString()}] 警告: 无法重置 ${adapter_id}: ${err.message}`);
+        }
 
-        // 使用 hcitool name 扫描
+        // 核心扫描命令：hcitool name 会尝试获取设备名称，如果设备在线则能获取到
         exec(`hcitool -i ${adapter_id} name ${target_mac}`, { timeout: 15000 }, (err, stdout) => {
             const isPresent = stdout && stdout.trim().length > 0;
             const state = isPresent ? 'ON' : 'OFF';
             
-            console.log(`[${new Date().toLocaleTimeString()}] 扫描 ${target_mac}: ${isPresent ? '【在线】' : '【离线】'}`);
+            console.log(`[${new Date().toLocaleTimeString()}] 扫描 ${target_mac} -> ${isPresent ? '【在线】' : '【离线】'}`);
             client.publish(stateTopic, state, { retain: true });
         });
     });
 }
 
 client.on('connect', () => {
-    console.log('成功连接到 MQTT Broker');
+    console.log('MQTT 连接成功！');
     publishDiscovery();
-    scan(); 
-    setInterval(scan, scan_interval * 1000);
+    // 首次执行
+    scan();
+    // 循环执行
+    setInterval(scan, (scan_interval || 30) * 1000);
 });
 
 client.on('error', (err) => {
-    console.error('MQTT 错误:', err.message);
+    console.error('MQTT 连接错误:', err.message);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('未处理的拒绝:', reason);
+client.on('offline', () => {
+    console.log('MQTT 已掉线，等待重连...');
+});
+
+// 处理系统信号
+process.on('SIGTERM', () => {
+    console.log('收到停止信号，正在关闭...');
+    process.exit(0);
 });
