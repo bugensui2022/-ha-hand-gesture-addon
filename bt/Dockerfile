@@ -12,9 +12,12 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
+# 复制文件
 COPY package.json .
 COPY index.js .
 
+# 安装依赖
 RUN npm install --production
 
+# 启动
 CMD [ "node", "index.js" ]
