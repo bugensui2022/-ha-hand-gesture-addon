@@ -1,0 +1,9 @@
+{
+  "name": "ha-bluetooth-presence",
+  "version": "1.0.0",
+  "description": "Bluetooth presence scanner for Home Assistant",
+  "main": "index.js",
+  "dependencies": {
+    "mqtt": "^5.0.0"
+  }
+}
