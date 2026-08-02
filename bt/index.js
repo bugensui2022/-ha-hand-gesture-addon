@@ -2,7 +2,7 @@ const mqtt = require('mqtt');
 const { exec } = require('child_process');
 const fs = require('fs');
 
-console.log('--- 蓝牙检测加载项 v1.0.6 启动 ---');
+console.log('--- 蓝牙 L2PING 扫描加载项 v1.0.7 启动 ---');
 
 // 读取配置
 let options;
@@ -15,17 +15,18 @@ try {
 
 const {
     mqtt_host, mqtt_port, mqtt_user, mqtt_password,
-    target_mac, scan_interval, max_failed_scans, adapter_id
+    target_mac, scan_interval, adapter_id, offline_tolerance
 } = options;
-
-let lastState = null; // 记录上一次的状态: 'ON' 或 'OFF'
-let failedCount = 0;  // 当前连续失败计数
 
 const cleanMac = target_mac.replace(/:/g, '').toLowerCase();
 const deviceId = `bt_presence_${cleanMac}`;
 const stateTopic = `homeassistant/binary_sensor/${deviceId}/state`;
 const configTopic = `homeassistant/binary_sensor/${deviceId}/config`;
 
+let currentState = 'INIT'; // 初始状态
+let failCount = 0; // 连续失败计数
+
+// MQTT 连接
 const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
     username: mqtt_user || undefined,
     password: mqtt_password || undefined,
@@ -34,7 +35,7 @@ const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
 
 function publishDiscovery() {
     const payload = {
-        name: `蓝牙在场检测 (${target_mac})`,
+        name: `蓝牙音箱 (${target_mac})`,
         device_class: 'presence',
         state_topic: stateTopic,
         unique_id: deviceId,
@@ -42,8 +43,8 @@ function publishDiscovery() {
         payload_off: 'OFF',
         device: {
             identifiers: [deviceId],
-            name: '蓝牙扫描器',
-            model: 'L2Ping Scanner',
+            name: '蓝牙扫描检测器',
+            model: 'L2PING Scanner',
             manufacturer: 'Custom Add-on'
         }
     };
@@ -51,40 +52,45 @@ function publishDiscovery() {
 }
 
 function updateState(newState) {
-    if (newState !== lastState) {
+    if (newState !== currentState) {
         const time = new Date().toLocaleTimeString();
-        console.log(`[${time}] 状态变化: ${lastState || '未知'} -> ${newState}`);
+        console.log(`[${time}] 状态变更: ${currentState} -> ${newState}`);
         client.publish(stateTopic, newState, { retain: true });
-        lastState = newState;
+        currentState = newState;
     }
 }
 
 function scan() {
-    // 使用 l2ping 进行快速检测，发送 1 个包
-    exec(`l2ping -i ${adapter_id} -c 1 ${target_mac}`, { timeout: 4000 }, (err, stdout) => {
-        const isSuccess = !err && stdout.includes('bytes from');
-
-        if (isSuccess) {
-            // 只要成功一次，立即判定为在线
-            failedCount = 0;
+    // 使用 l2ping 发送 1 个包
+    // -c 1: 发送一个包, -i: 指定适配器, -t 2: 2秒超时
+    const cmd = `l2ping -c 1 -i ${adapter_id} ${target_mac}`;
+    
+    exec(cmd, { timeout: 4000 }, (err) => {
+        if (!err) {
+            // 扫描成功 -> 即时上线
+            failCount = 0;
             updateState('ON');
         } else {
-            // 失败时，增加计数
-            failedCount++;
-            // 只有连续失败次数达到设定值，才判定为离线
-            if (failedCount >= max_failed_scans) {
+            // 扫描失败 -> 累加失败计数
+            failCount++;
+            if (failCount >= offline_tolerance) {
                 updateState('OFF');
             }
-            // 如果还不到次数，保持当前状态（通常是 ON），等待下一次扫描
         }
     });
 }
 
 client.on('connect', () => {
-    console.log('MQTT 已连接，开始监控...');
+    console.log('MQTT 连接成功');
     publishDiscovery();
     setInterval(scan, scan_interval * 1000);
-    scan(); // 立即执行第一次
+    scan(); // 立即执行第一次扫描
 });
 
 client.on('error', (err) => console.error('MQTT 错误:', err.message));
+
+// 捕捉退出信号
+process.on('SIGTERM', () => {
+    console.log('加载项停止中...');
+    process.exit(0);
+});
