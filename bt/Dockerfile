@@ -1,10 +1,8 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM $BUILD_FROM
+# 使用轻量级 Node 镜像，避开 HA 基础镜像的 s6-overlay 冲突
+FROM node:20-alpine
 
-# 安装必要的工具：nodejs, npm, 蓝牙工具, dbus, util-linux
+# 安装蓝牙工具和必要的系统依赖
 RUN apk add --no-cache \
-    nodejs \
-    npm \
     bluez \
     bluez-deprecated \
     dbus \
@@ -12,12 +10,15 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# 拷贝应用文件
-COPY package.json .
-COPY index.js .
+# 复制依赖定义
+COPY package.json ./
 
 # 安装依赖
 RUN npm install --production
 
-# 启动脚本
+# 复制主程序
+COPY index.js ./
+
+# 赋予执行权限并启动
+# 注意：Node 程序将作为 PID 1 运行，这样更稳定
 CMD [ "node", "index.js" ]
