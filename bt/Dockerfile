@@ -1,7 +1,7 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
 FROM $BUILD_FROM
 
-# 安装必要的运行时工具
+# 安装必要的系统组件
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -10,12 +10,12 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# 复制应用文件
+# 复制 package.json 并安装依赖
 COPY package.json .
-COPY index.js .
-
-# 安装依赖
 RUN npm install --production
 
-# 直接启动 node，由 S6 托管，避免 PID 1 错误
+# 复制源代码
+COPY index.js .
+
+# 直接通过 node 启动，避免 s6-overlay 环境下的 PID 冲突
 CMD [ "node", "/app/index.js" ]
