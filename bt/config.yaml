@@ -1,7 +1,7 @@
 name: "Bluetooth Classic Presence"
 version: "1.0.5"
 slug: "bluetooth_classic_presence"
-description: "优化版经典蓝牙扫描：采用 l2ping 机制，支持防抖动逻辑和精简日志"
+description: "使用 l2ping 实现的高性能经典蓝牙在场检测，具备即时上线和离线容错逻辑"
 arch:
   - aarch64
   - amd64
@@ -20,7 +20,7 @@ options:
   mqtt_user: ""
   mqtt_password: ""
   target_mac: "FC:E8:06:19:19:E3"
-  scan_interval: 10
+  scan_interval: 5
   adapter_id: "hci0"
 schema:
   mqtt_host: str
