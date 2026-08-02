@@ -1,7 +1,6 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM $BUILD_FROM
+FROM alpine:3.18
 
-# 安装必要的工具
+# 安装必要的工具：nodejs, npm, 蓝牙工具, dbus
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -12,12 +11,12 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# 复制文件
+# 拷贝并安装依赖
 COPY package.json .
-COPY index.js .
-
-# 安装依赖
 RUN npm install --production
 
-# 启动
+# 拷贝代码
+COPY index.js .
+
+# 启动脚本
 CMD [ "node", "index.js" ]
