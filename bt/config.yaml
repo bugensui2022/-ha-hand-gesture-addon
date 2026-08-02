@@ -1,5 +1,5 @@
 name: "Bluetooth Classic Presence"
-version: "1.0.1"
+version: "1.0.2"
 slug: "bluetooth_classic_presence"
 description: "通过经典蓝牙 MAC 地址扫描判断设备是否在场，通过 MQTT 暴露给 HA"
 arch:
@@ -12,9 +12,6 @@ startup: application
 boot: auto
 host_network: true
 full_access: true
-# 允许访问蓝牙硬件
-privileged:
-  - NET_ADMIN
 devices:
   - /dev/hci0:/dev/hci0
 options:
