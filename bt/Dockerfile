@@ -1,20 +1,21 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
 FROM $BUILD_FROM
 
-# Install necessary tools
+# 安装运行环境
 RUN apk add --no-cache \
     nodejs \
     npm \
     bluez \
-    bluez-deprecated
+    bluez-deprecated \
+    dbus
 
 WORKDIR /app
 
-# Copy application files
-COPY package.json .
-COPY index.js .
+# 复制文件
+COPY package.json index.js ./
 
-RUN npm install
+# 安装依赖
+RUN npm install --production
 
-# Start the application
+# 启动脚本
 CMD [ "node", "index.js" ]
