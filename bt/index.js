@@ -2,86 +2,76 @@ const mqtt = require('mqtt');
 const { exec } = require('child_process');
 const fs = require('fs');
 
-console.log('--- 漫步者蓝牙追踪器启动中 (v1.1.0) ---');
+console.log('--- 蓝牙扫描加载项 v1.1.1 启动中 ---');
 
 // 读取配置
 let options;
 try {
     options = JSON.parse(fs.readFileSync('/data/options.json', 'utf8'));
 } catch (e) {
-    console.error('解析配置失败:', e.message);
+    console.error('解析配置文件失败:', e.message);
     process.exit(1);
 }
 
 const {
     mqtt_host, mqtt_port, mqtt_user, mqtt_password,
-    target_mac, scan_interval, offline_tolerance, adapter_id
+    target_mac, scan_interval, adapter_id, offline_tolerance
 } = options;
 
-const deviceId = 'mbzbt';
+const cleanMac = target_mac.replace(/:/g, '').toLowerCase();
+const deviceId = `mbzbt`; // 实体 ID: device_tracker.mbzbt
 const stateTopic = `homeassistant/device_tracker/${deviceId}/state`;
 const configTopic = `homeassistant/device_tracker/${deviceId}/config`;
 
-let consecutiveFailures = 0;
-let lastState = null; // 记录上一次发送的状态，避免重复发送
+let lastState = null;
+let offlineCount = 0;
 
-// 连接 MQTT
 const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
     username: mqtt_user || undefined,
     password: mqtt_password || undefined,
-    reconnectPeriod: 5000
+    reconnectPeriod: 5000,
+    will: {
+        topic: stateTopic,
+        payload: 'not_home',
+        retain: true
+    }
 });
 
 function publishDiscovery() {
     const payload = {
-        name: '漫步者蓝牙',
+        name: `漫步者蓝牙`,
         state_topic: stateTopic,
-        unique_id: deviceId,
-        source_type: 'bluetooth',
+        unique_id: `bt_tracker_${cleanMac}`,
         payload_home: 'home',
         payload_not_home: 'not_home',
+        source_type: 'bluetooth',
         device: {
-            identifiers: [deviceId],
-            name: '蓝牙离线/在线扫描器',
-            manufacturer: 'Custom Add-on',
-            model: 'L2Ping Tracker'
+            identifiers: [cleanMac],
+            name: '漫步者蓝牙音响',
+            model: 'Classic Bluetooth Device',
+            manufacturer: 'Edifier'
         }
     };
-    // retain: true 确保 HA 重启后能重新发现设备
     client.publish(configTopic, JSON.stringify(payload), { retain: true });
 }
 
-function updateState(isPresent) {
-    let newState = isPresent ? 'home' : 'not_home';
-    
-    // 只有当状态发生变化时，或者刚启动时才发送 MQTT 消息和打印日志
-    if (newState !== lastState) {
-        const time = new Date().toLocaleTimeString();
-        console.log(`[${time}] 状态变化: ${lastState || '未知'} -> ${newState === 'home' ? '【在线】' : '【离线】'}`);
-        
-        client.publish(stateTopic, newState, { retain: true });
-        lastState = newState;
-    }
-}
-
 function scan() {
-    // 1 ping，2秒超时。因为是 l2ping，如果是开机状态，响应通常在几百毫秒内
-    exec(`l2ping -i ${adapter_id} -c 1 -t 2 ${target_mac}`, (err) => {
-        const success = !err;
-
-        if (success) {
-            consecutiveFailures = 0;
-            updateState(true);
+    exec(`l2ping -c 1 -i ${adapter_id} ${target_mac}`, { timeout: 4000 }, (err) => {
+        const isPresent = !err;
+        
+        if (isPresent) {
+            offlineCount = 0;
+            if (lastState !== 'home') {
+                console.log(`[${new Date().toLocaleTimeString()}] 设备上线: ${target_mac}`);
+                client.publish(stateTopic, 'home', { retain: true });
+                lastState = 'home';
+            }
         } else {
-            consecutiveFailures++;
-            // 只有达到设定的容错次数，才判定为离线
-            if (consecutiveFailures >= offline_tolerance) {
-                updateState(false);
-            } else {
-                // 如果是中间偶尔失败，保持当前状态，静默处理
-                if (lastState === 'home') {
-                    // console.log(`[DEBUG] 扫描失败 (${consecutiveFailures}/${offline_tolerance}), 保持在线状态...`);
-                }
+            offlineCount++;
+            if (offlineCount >= offline_tolerance && lastState !== 'not_home') {
+                console.log(`[${new Date().toLocaleTimeString()}] 设备离线 (已重试 ${offlineCount} 次): ${target_mac}`);
+                client.publish(stateTopic, 'not_home', { retain: true });
+                lastState = 'not_home';
             }
         }
     });
@@ -93,5 +83,24 @@ client.on('connect', () => {
     scan();
     setInterval(scan, scan_interval * 1000);
 });
+
+// --- 优雅停机逻辑 ---
+function handleShutdown(signal) {
+    console.log(`收到 ${signal} 信号，正在关闭...`);
+    // 停止前发送离线状态
+    if (client.connected) {
+        client.publish(stateTopic, 'not_home', { retain: true }, () => {
+            client.end(true, () => {
+                console.log('MQTT 连接已关闭，程序退出');
+                process.exit(0); // 必须返回 0 才能让 HA 显示“已停止”
+            });
+        });
+    } else {
+        process.exit(0);
+    }
+}
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));
 
 client.on('error', (err) => console.error('MQTT 错误:', err.message));
