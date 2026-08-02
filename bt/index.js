@@ -2,24 +2,14 @@ const mqtt = require('mqtt');
 const { exec } = require('child_process');
 const fs = require('fs');
 
-console.log('======================================');
-console.log('   蓝牙经典在线扫描插件 (v1.0.5) 启动中');
-console.log('======================================');
+console.log('--- 蓝牙高效扫描加载项 v1.0.5 启动 ---');
 
-// 读取 HA 插件配置
-const CONFIG_PATH = '/data/options.json';
-let options = {};
-
-if (fs.existsSync(CONFIG_PATH)) {
-    try {
-        options = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-        console.log('成功加载配置文件');
-    } catch (e) {
-        console.error('解析配置文件失败:', e.message);
-        process.exit(1);
-    }
-} else {
-    console.error('未找到配置文件 /data/options.json，请确认插件设置已保存');
+// 读取配置
+let options;
+try {
+    options = JSON.parse(fs.readFileSync('/data/options.json', 'utf8'));
+} catch (e) {
+    console.error('解析配置文件失败:', e.message);
     process.exit(1);
 }
 
@@ -38,20 +28,20 @@ const deviceId = `bt_presence_${cleanMac}`;
 const stateTopic = `homeassistant/binary_sensor/${deviceId}/state`;
 const configTopic = `homeassistant/binary_sensor/${deviceId}/config`;
 
-// MQTT 选项
-const mqttOptions = {
-    port: mqtt_port || 1883,
+let lastState = null; // 记录上一次的状态
+let failCount = 0;    // 连续失败计数
+const MAX_FAILS = 3;  // 允许连续失败的次数（容错）
+
+// MQTT 连接
+const client = mqtt.connect(`mqtt://${mqtt_host}:${mqtt_port}`, {
     username: mqtt_user || undefined,
     password: mqtt_password || undefined,
     reconnectPeriod: 5000
-};
-
-console.log(`尝试连接到 MQTT Broker: ${mqtt_host}:${mqtt_port}`);
-const client = mqtt.connect(`mqtt://${mqtt_host}`, mqttOptions);
+});
 
 function publishDiscovery() {
     const payload = {
-        name: `蓝牙在线状态 (${target_mac})`,
+        name: `蓝牙设备在场 (${target_mac})`,
         device_class: 'presence',
         state_topic: stateTopic,
         unique_id: deviceId,
@@ -59,52 +49,62 @@ function publishDiscovery() {
         payload_off: 'OFF',
         device: {
             identifiers: [deviceId],
-            name: '蓝牙离线/在线扫描器',
+            name: '蓝牙扫描器',
             manufacturer: 'Custom Add-on',
-            model: 'Classic BT Scanner'
+            model: 'High-Speed L2Ping'
         }
     };
     client.publish(configTopic, JSON.stringify(payload), { retain: true });
-    console.log(`已发布 HA 实体发现信息`);
+}
+
+function updateState(newState) {
+    if (newState !== lastState) {
+        const time = new Date().toLocaleTimeString();
+        console.log(`[${time}] 状态切换: ${lastState || '未知'} -> ${newState}`);
+        client.publish(stateTopic, newState, { retain: true });
+        lastState = newState;
+    }
 }
 
 function scan() {
-    // 强制开启蓝牙适配器
-    exec(`hciconfig ${adapter_id} up`, (err) => {
-        if (err) {
-            console.error(`[${new Date().toLocaleTimeString()}] 警告: 无法重置 ${adapter_id}: ${err.message}`);
-        }
+    // 确保适配器是开启的
+    exec(`hciconfig ${adapter_id} up`);
 
-        // 核心扫描命令：hcitool name 会尝试获取设备名称，如果设备在线则能获取到
-        exec(`hcitool -i ${adapter_id} name ${target_mac}`, { timeout: 15000 }, (err, stdout) => {
-            const isPresent = stdout && stdout.trim().length > 0;
-            const state = isPresent ? 'ON' : 'OFF';
-            
-            console.log(`[${new Date().toLocaleTimeString()}] 扫描 ${target_mac} -> ${isPresent ? '【在线】' : '【离线】'}`);
-            client.publish(stateTopic, state, { retain: true });
-        });
+    /**
+     * 使用 l2ping 代替 hcitool name
+     * -c 1: 只发送一个包
+     * -t 5: 5秒超时
+     */
+    const cmd = `l2ping -i ${adapter_id} -c 1 -t 5 ${target_mac}`;
+    
+    exec(cmd, (err, stdout) => {
+        // 如果命令返回 0 且 stdout 包含 "from"，说明设备响应了
+        const success = !err && stdout.includes('from');
+
+        if (success) {
+            failCount = 0;
+            updateState('ON');
+        } else {
+            failCount++;
+            // 只有连续失败达到阈值才判定为离线
+            if (failCount >= MAX_FAILS) {
+                updateState('OFF');
+            }
+        }
     });
 }
 
 client.on('connect', () => {
-    console.log('MQTT 连接成功！');
+    console.log('MQTT 已连接，开始监控...');
     publishDiscovery();
-    // 首次执行
+    
+    // 立即执行一次
     scan();
-    // 循环执行
-    setInterval(scan, (scan_interval || 30) * 1000);
+    // 定时循环
+    setInterval(scan, scan_interval * 1000);
 });
 
-client.on('error', (err) => {
-    console.error('MQTT 连接错误:', err.message);
-});
+client.on('error', (err) => console.error('MQTT 错误:', err.message));
 
-client.on('offline', () => {
-    console.log('MQTT 已掉线，等待重连...');
-});
-
-// 处理系统信号
-process.on('SIGTERM', () => {
-    console.log('收到停止信号，正在关闭...');
-    process.exit(0);
-});
+// 保持服务不退出
+process.on('unhandledRejection', (reason) => console.error('Error:', reason));
