@@ -20,5 +20,5 @@ RUN npm install --production
 # 赋予 node 进程直接访问网络栈的权限
 RUN setcap 'cap_net_raw,cap_net_admin+eip' $(readlink -f $(which node))
 
-# 直接启动，不再使用 run.sh，确保 node 就是 PID 1，避免 s6-overlay 冲突
+# 直接启动，确保 node 是 PID 1
 CMD [ "node", "index.js" ]
