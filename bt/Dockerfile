@@ -1,14 +1,12 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
-FROM $BUILD_FROM
+FROM node:20-alpine
 
-# 安装必要的工具：nodejs, npm, 蓝牙工具, dbus, bluez
+# 安装蓝牙工具和必要库
 RUN apk add --no-cache \
-    nodejs \
-    npm \
     bluez \
     bluez-deprecated \
     dbus \
-    util-linux
+    util-linux \
+    libcap
 
 WORKDIR /app
 
@@ -19,9 +17,8 @@ COPY index.js .
 # 安装依赖
 RUN npm install --production
 
-# 赋予 node 访问蓝牙栈的权限
-RUN apk add --no-cache libcap && \
-    setcap 'cap_net_raw,cap_net_admin+eip' $(readlink -f $(which node))
+# 赋予 node 进程直接访问网络栈的权限
+RUN setcap 'cap_net_raw,cap_net_admin+eip' $(readlink -f $(which node))
 
-# 直接启动 node，不再使用 run.sh 脚本，避免 s6-overlay PID 1 冲突
+# 直接启动，不再使用 run.sh，确保 node 就是 PID 1，避免 s6-overlay 冲突
 CMD [ "node", "index.js" ]
