@@ -1,6 +1,6 @@
 # -ha-hand-gesture-addon、bt
  
- # 🖐️ Home Assistant 手势识别与中控联动加载项 (Hand Gesture Recognition Add-on)
+ # 🖐️ Home Assistant 手势识别加载项 (Hand Gesture Recognition Add-on)
 
 [![Home Assistant Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-blue.svg?logo=home-assistant)](https://www.home-assistant.io/)
 [![Google MediaPipe](https://img.shields.io/badge/Engine-Google%20MediaPipe-orange.svg?logo=google)](https://developers.google.com/mediapipe)
