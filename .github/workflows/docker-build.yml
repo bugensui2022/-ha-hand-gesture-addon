@@ -20,6 +20,6 @@ jobs:
       - name: Test Docker Build
         uses: docker/build-push-action@v6
         with:
-          context: ./hand-gesture-addon
+          context: ./hand_gesture
           file: ./hand_gesture/Dockerfile
           push: false
