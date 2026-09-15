@@ -6,8 +6,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 替换 Apt 清华镜像源
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true && \
+    apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
@@ -16,15 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 直接安装 Python 所需依赖包（MediaPipe, OpenCV, MQTT 等）
-RUN pip install --no-cache-dir --upgrade pip && \
+# 替换 Python pip 清华镜像源
+RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
     pip install --no-cache-dir \
     mediapipe \
     opencv-python-headless \
-    paho-mqtt
+    paho-mqtt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 复制当前文件夹下所有应用代码
 COPY . .
 
-# 直接启动 app.py 脚本
 CMD [ "python", "/app/app.py" ]
