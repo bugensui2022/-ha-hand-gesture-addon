@@ -6,11 +6,11 @@ os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
 
 import sys
 # 终极物理静默：将 stderr (文件句柄 2) 彻底定向到空设备，阻断 C++ 库的直接输出
-#try:
-    #stderr_fd = os.open(os.devnull, os.O_WRONLY)
-    #os.dup2(stderr_fd, 2)
-#except Exception:
-    #pass
+try:
+    stderr_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(stderr_fd, 2)
+except Exception:
+    pass
 
 import time
 import json
