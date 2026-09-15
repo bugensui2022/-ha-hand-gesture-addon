@@ -26,6 +26,5 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 复制当前文件夹下所有应用代码
 COPY . .
 
-# 赋予执行权限并启动
-RUN chmod +x /app/run.sh 2>/dev/null || true
-CMD [ "/app/run.sh" ]
+# 直接启动 app.py 脚本
+CMD [ "python", "/app/app.py" ]
